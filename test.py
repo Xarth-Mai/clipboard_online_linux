@@ -19,6 +19,6 @@ print(response.text)
 response = requests.post(
     'http://localhost:8777',
     headers={'Timestamp': timestamp, 'MD5': md5_hash},
-    data="Hello, Clipboard!"
+    data="=Hello, Clipboard!"
 )
 print(response.status_code)

@@ -97,7 +97,7 @@ void handle_request(const int client_socket) {
             response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n" + clipboard_content;
         } else if (method == "POST") {
             // 身份验证成功，获取请求体并设置到剪贴板
-            const std::string body = request.substr(request.find("\r\n\r\n") + 4); // 获取请求体
+            const std::string body = request.substr(request.find("\r\n\r\n") + 5); // 获取请求体
             set_clipboard(body); // 将请求体数据设置到剪贴板
             response = "HTTP/1.1 204 No Content\r\n\r\n"; // 成功但无内容返回
         } else {
