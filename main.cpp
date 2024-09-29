@@ -7,16 +7,18 @@
 #include <openssl/evp.h>  // 新的哈希接口
 #include <sstream>
 #include <iomanip>
+#include <csignal>
 
 // 定义常量 PORT 和 AUTH_PASSWORD
 constexpr int PORT = 8777;  // 服务器监听的端口号
 const std::string AUTH_PASSWORD = "1234"; // 硬编码的密码，用于身份验证
+int server_fd; // 服务器套接字
 
 // 将数据设置到剪贴板的函数
 void set_clipboard(const std::string &data) {
-    // 使用 xclip 将数据添加到剪贴板
-    if (FILE *pipe = popen("xclip -selection clipboard", "w")) {
-        fprintf(pipe, "%s", data.c_str()); // 将数据写入管道
+    // 使用 xclip 将数据添加到剪贴板，确保覆盖
+    if (FILE *pipe = popen("xclip -selection clipboard -i", "w")) {
+        fwrite(data.c_str(), sizeof(char), data.size(), pipe);
         pclose(pipe); // 关闭管道
     } else {
         std::cerr << "无法打开管道" << std::endl; // 错误处理
@@ -36,6 +38,39 @@ std::string get_clipboard() {
         std::cerr << "无法打开管道" << std::endl; // 错误处理
     }
     return result; // 返回剪贴板内容
+}
+
+// 进行URL解码的函数
+std::string url_decode(const std::string &encoded) {
+    std::string decoded;
+    for (std::size_t i = 0; i < encoded.length(); ++i) {
+        if (encoded[i] == '%') {
+            if (i + 2 < encoded.length()) {
+                // 获取两位十六进制字符
+                std::string hex_str = encoded.substr(i + 1, 2);
+                char *end_ptr = nullptr;
+
+                // 将十六进制字符串转换为数值
+
+                // 检查转换是否成功
+                if (const unsigned long hex_value = strtoul(hex_str.c_str(), &end_ptr, 16); *end_ptr == '\0' && hex_value <= 0xFF) {
+                    decoded += static_cast<char>(hex_value);
+                    i += 2;  // 跳过两个已解析的字符
+                } else {
+                    // 处理无效的 % 编码，保留原始值
+                    decoded += '%';
+                }
+            } else {
+                // 无效的 % 编码，保留原始值
+                decoded += '%';
+            }
+        } else if (encoded[i] == '+') {
+            decoded += ' ';  // 将 + 转换为空格
+        } else {
+            decoded += encoded[i];  // 保留其他字符
+        }
+    }
+    return decoded;
 }
 
 // 计算输入字符串的 MD5 哈希值的函数
@@ -67,7 +102,7 @@ bool authenticate(const std::string &timestamp, const std::string &md5_hash) {
 
 // 处理客户端请求的函数
 void handle_request(const int client_socket) {
-    char buffer[1024]; // 存储接收的数据
+    char buffer[40960]; // 存储接收的数据
     read(client_socket, buffer, sizeof(buffer) - 1); // 从客户端读取数据
     buffer[sizeof(buffer) - 1] = '\0'; // 确保以 null 结尾
 
@@ -97,8 +132,13 @@ void handle_request(const int client_socket) {
             response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n" + clipboard_content;
         } else if (method == "POST") {
             // 身份验证成功，获取请求体并设置到剪贴板
-            const std::string body = request.substr(request.find("\r\n\r\n") + 5); // 获取请求体
-            set_clipboard(body); // 将请求体数据设置到剪贴板
+            std::string body = request.substr(request.find("\r\n\r\n") + 4); // 获取请求体
+            if (!body.empty()) {
+                body.erase(0, 1); // 删除第一个字符
+            }
+            const std::string body_decode = url_decode(body);
+
+            set_clipboard(body_decode); // 将请求体数据设置到剪贴板
             response = "HTTP/1.1 204 No Content\r\n\r\n"; // 成功但无内容返回
         } else {
             // 不支持的请求方法，返回 400 Bad Request
@@ -111,13 +151,28 @@ void handle_request(const int client_socket) {
     close(client_socket); // 关闭与客户端的连接
 }
 
-// 主函数
+// 信号处理函数，用于关闭套接字和退出程序
+void signal_handler(const int signum) {
+    std::cout << "\n接收到信号 " << signum << "，正在关闭服务器..." << std::endl;
+
+    if (server_fd >= 0) {
+        close(server_fd); // 关闭服务器套接字
+        std::cout << "服务器套接字已关闭。" << std::endl;
+    }
+
+    exit(signum); // 退出程序
+}
+
 [[noreturn]] int main() {
     struct sockaddr_in server_addr{}, client_addr{};
     socklen_t addr_len = sizeof(client_addr); // 地址长度
 
+    // 注册信号处理程序
+    signal(SIGINT, signal_handler);  // 捕获 Ctrl+C (SIGINT)
+    signal(SIGTERM, signal_handler); // 捕获终止信号 (SIGTERM)
+
     // 创建服务器套接字
-    const int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
         perror("无法创建套接字"); // 错误处理
         exit(EXIT_FAILURE);
